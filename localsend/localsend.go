@@ -2,19 +2,21 @@ package localsend
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"hash/crc32"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
 
 const (
-	defaultAlias = "Localsend Discovery"
+	Alias = "Localsend Discovery"
+	// https://github.com/localsend/localsend/blob/6dd28ce661dcf4b30cef47ac1f57a0ce410f0988/lib/constants.dart#L18-L25
+	Port           = 53317
+	MulticastGroup = "224.0.0.167"
 )
 
 // {"alias":"...","version":"2.0","deviceModel":"Linux","deviceType":"desktop","fingerprint":"...","port":53317,"protocol":"https","download":false,"announcement":true,"announce":true}
@@ -32,14 +34,12 @@ type Register struct {
 	Announce     bool   `json:"announce,omitempty"`
 }
 
-func (r Register) Checksum() uint32 {
-	return crc32.ChecksumIEEE([]byte(r.Alias + r.Version + r.DeviceModel + r.DeviceType + r.FingerPrint + r.Protocol + fmt.Sprintf("%d", r.Port)))
+func (r Register) String() string {
+	b, _ := json.Marshal(r)
+	return string(b)
 }
 
-func SendHTTP(origin *net.UDPAddr, originRegister, selfRegister Register) error {
-	selfRegister.Alias = GetAlias()
-	b, _ := json.Marshal(selfRegister)
-
+func SendHTTP(ctx context.Context, target *net.UDPAddr, origin, self Register) error {
 	c := &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
@@ -49,50 +49,32 @@ func SendHTTP(origin *net.UDPAddr, originRegister, selfRegister Register) error 
 	}
 
 	var u url.URL
-	u.Scheme = originRegister.Protocol
-	u.Host = fmt.Sprintf("%s:%d", origin.IP.String(), originRegister.Port)
+	u.Scheme = origin.Protocol
+	u.Host = fmt.Sprintf("%s:%d", target.IP.String(), origin.Port)
 	u.Path = "/api/localsend/"
-	if originRegister.Version == "1.0" {
+	if origin.Version == "1.0" {
 		u.Path += "v1"
 	} else {
 		u.Path += "v2"
 	}
 	u.Path += "/register"
-	_, err := c.Post(u.String(), "application/json", bytes.NewReader(b))
-	return err
-}
 
-func SendUDP(addr string, selfRegister Register, loop bool, interval time.Duration) error {
-	selfRegister.Alias = GetAlias()
+	self.Alias = GetAlias()
 
-	b, err := json.Marshal(selfRegister)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader([]byte(self.String())))
 	if err != nil {
 		return err
 	}
 
-	u, err := net.ResolveUDPAddr("udp4", addr)
-	if err != nil {
-		return err
-	}
+	req.Header.Set("Content-Type", "application/json")
 
-	conn, err := net.DialUDP("udp4", nil, u)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	_, err = conn.Write(b)
-
-	for loop {
-		time.Sleep(interval)
-		_, err = conn.Write(b)
-	}
+	_, err = c.Do(req)
 
 	return err
 }
 
 func GetAlias() string {
-	r := []string{defaultAlias}
+	r := []string{Alias}
 	ifaces, _ := net.Interfaces()
 	for _, i := range ifaces {
 		if i.Name == "lo" || i.Name == "docker0" || strings.Index(i.Name, "br-") == 0 {
@@ -103,7 +85,7 @@ func GetAlias() string {
 			s := strings.Split(addr.String(), "/")
 			if len(s) > 0 {
 				if s[0] != "127.0.0.1" && strings.Index(s[0], ".") != -1 {
-					r = append(r, s[0])
+					r = append(r, i.Name+" "+s[0])
 				}
 			}
 		}
