@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"strings"
 	"syscall"
 	"time"
 
@@ -38,7 +39,7 @@ func main() {
 	defer cancel()
 
 	var selfAnounce = localsend.Register{
-		Alias:        "Localsend Discovery",
+		Alias:        localsend.GetAlias(),
 		Version:      "2.0",
 		DeviceModel:  "Linux",
 		DeviceType:   "desktop",
@@ -51,7 +52,7 @@ func main() {
 	}
 
 	var selfResponse = localsend.Register{
-		Alias:        "Localsend Discovery",
+		Alias:        localsend.GetAlias(),
 		Version:      "2.0",
 		DeviceModel:  "Linux",
 		DeviceType:   "desktop",
@@ -103,6 +104,26 @@ func main() {
 		server.Shutdown(ctx)
 		cancel()
 	}
+}
+
+func shouldResponse(origin, self localsend.Register) bool {
+	if strings.Index(origin.Alias, localsend.Alias) == 0 {
+		return false
+	}
+
+	if origin.FingerPrint == "" {
+		return false
+	}
+
+	if origin.FingerPrint == self.FingerPrint {
+		return false
+	}
+
+	if !origin.Announce {
+		return false
+	}
+
+	return true
 }
 
 func listenMulticast(ctx context.Context,
@@ -202,15 +223,7 @@ func httpHandler(self localsend.Register) func(http.ResponseWriter, *http.Reques
 			return
 		}
 
-		if r.FingerPrint == "" {
-			return
-		}
-
-		if r.FingerPrint == self.FingerPrint {
-			return
-		}
-
-		if !r.Announce {
+		if !shouldResponse(r, self) {
 			return
 		}
 
@@ -229,15 +242,7 @@ func udpHandler(ctx context.Context, self localsend.Register) func(*net.UDPAddr,
 			return
 		}
 
-		if r.FingerPrint == "" {
-			return
-		}
-
-		if r.FingerPrint == self.FingerPrint {
-			return
-		}
-
-		if !r.Announce {
+		if !shouldResponse(r, self) {
 			return
 		}
 
